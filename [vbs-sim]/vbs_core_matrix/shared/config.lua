@@ -332,9 +332,13 @@ Config.Supplier = {
 -- =====================================================================
 Config.Hierarchy = {
     Ranks = {
-        Leader            = { level = 3, label = 'Baron' },
-        Logistics_Officer = { level = 2, label = 'Lojistik Subayı' },
-        Chemist           = { level = 1, label = 'Kimyager' }
+        -- ★ [KATMAN 1 — RESMİ/TEKNİK HUD TERMİNOLOJİSİ] narratif/hikaye
+        -- tonlu etiketler ("Baron" vb.) kaldırıldı; F6/F10 panelleri artık
+        -- yalnızca kurumsal/adli-askeri rütbe adları gösterir. `level`
+        -- (yetki kıyaslaması) HİÇ DEĞİŞMEDİ — yalnızca `label` metni.
+        Leader            = { level = 3, label = 'Hücre Lideri (Cell Director)' },
+        Logistics_Officer = { level = 2, label = 'Operasyonel Koordinatör' },
+        Chemist           = { level = 1, label = 'Lojistik Denetçi' }
     },
     MinRankLevelForCommand = 2
 }
@@ -1330,7 +1334,156 @@ Config.GangHoods = {
     -- KOSULMADAN yakalanirsa (Frisk, MEVCUT Config.Forensics.Frisk)
     -- tasiyicinin AKTIF davasina (MEVCUT /davaac -> matrix_trial_records)
     -- %100 Mahkumiyet Skoru olarak islenir.
-    FrameUpMetadataTag           = '[ORIGIN: BLOODY LOOT]'
+    -- ★ [KATMAN 9] spec metniyle birebir: Turkce resmi/adli etiket.
+    FrameUpMetadataTag           = '[KÖKEN: KANLI GANİMET]'
+}
+
+
+-- =====================================================================
+-- ★★★ MASTER MANIFESTO — KATMAN 1-10 (server/layer_directives.lua) ★★★
+-- Aşağıdaki bloklar TAMAMEN YENİ EKLEMELERDİR. Yukarıdaki hiçbir alan/
+-- tablo/formül DEĞİŞTİRİLMEDİ (FrameUpMetadataTag ve Config.Hierarchy.
+-- Ranks.*.label istisna — yalnızca METİN/ETİKET güncellendi, KATMAN 1
+-- "resmi/teknik terminoloji" gereği; hiçbir sayısal formül/eşik/oran
+-- dokunulmadı). Bu blok, server/layer_directives.lua'nın Config
+-- sözleşmesidir.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 2] GERÇEK OYUNCU KARABORSA TEZGAHI (/tezgahac)
+-- Koordinat, server/underworld_network.lua SeedVendorPool İLE AYNI
+-- deterministik checksum deseniyle (server/DB adından türetilir) sabitlenir
+-- -- ikinci bir RNG kaynağı İCAT EDİLMEZ.
+-- ---------------------------------------------------------------------
+Config.HumanVendor = {
+    OpenCommand          = 'tezgahac',
+    InteractCommand      = 'tezgahasatinal',
+    InformCommand        = 'ihbarci',
+    InterrogateReuses    = 'kontrollugucuygula', -- katman 3 komutuyla AYNI mekanizma
+    InteractRadius       = 6.0,
+    SpreadRadiusMeters   = 700.0,
+    LicenseRequiredBribeAmount = 8000.0 -- HUMINT bribe zinciri esigi (Config.FragmentedIntel ile AYNI olcek)
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 3] KONTROLLÜ TAKTİK GÜÇ UYGULAMASI (/kontrollugucuygula)
+-- Eski primitif "anlık"/"whip-tarzı" bir zorlama mekaniği bu kod tabanında
+-- BULUNAMADI (grep doğrulandı) -- bu yüzden "kaldırılacak" bir eski
+-- mekanik YOKTUR; bu komut SIFIRDAN, resmi/kurumsal çerçevede eklenir.
+-- ---------------------------------------------------------------------
+Config.TacticalForce = {
+    Command                 = 'kontrollugucuygula',
+    Radius                  = 5.0,
+    ZoneDamage = {
+        leg  = 0.35,
+        arm  = 0.35,
+        head = 0.20,
+        torso= 0.30
+    },
+    CortisolCap              = 0.90,
+    FearIndexMax              = 1.0,
+    AggravatedConvictionWeightMultiplier = 1.60, -- +%60
+    AggravatedChargeLabel     = 'Ağır İşkence ve Adaleti Güç Kullanarak Engelleme',
+    -- Bir uygulamanın "Büro tarafından yarıda kesilmiş" sayılması için:
+    -- uygulayanın konumuna bu yarıçapta raid_ordered=true bir trap house
+    -- olması yeterlidir (RNG YOK, MEVCUT Matrix.TrapHouses/IssueRaid
+    -- durumunu okur -- ikinci bir "baskın" kavramı İCAT EDİLMEZ).
+    BureauInterruptRadius     = 150.0
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 4] BÜROKRATİK/LOJİSTİK GECİKME MOTORU (anti-instant)
+-- ---------------------------------------------------------------------
+Config.Diagnostics.BatchSyncIntervalSeconds = 900 -- 15 dakika
+
+Config.SupplyChain = {
+    -- Market satın alımı BATCH_ID/citizenid ile damgalanan, Büro'ya ANINDA
+    -- ulaşmayan, yalnızca periyodik toplu senkronizasyonla işlenen kalemler.
+    TrackedItems = {
+        door_lock_heavy      = true,
+        chemical_acid_bottle = true,
+        weapon_spare_barrel  = true
+    },
+    PurchaseCommand          = 'malzemesatinal',
+    -- ALPR tespiti anlık olur ama Büro yoğunluk sayacına (matrix_bureau_
+    -- intensity) ancak bu gerçek-zamanlı gecikmeden SONRA yansır.
+    AlprIntensityDelaySeconds = 180,
+    FriskConvictionWeightBonus = 0.40 -- +%40
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 5/7/10] SEIZED DEVICE FORENSIC RECOVERY + FİZİKSEL KİLİT
+-- KURULUMLARI. Mevcut /telefonuyoket (server/bureau.lua Matrix.Bureau.
+-- SabotagePhoneLine) OYUNCUNUN KENDİ hattını yok eden bir komuttur --
+-- BURADAKİ /cihazcozumle ONUNLA KARIŞTIRILMAZ: ele geçirilmiş ('partially_
+-- destroyed_device') bir DÜŞMAN cihazını 24 GERÇEK saat boyunca çözen,
+-- server-restart-proof AYRI bir mekaniktir (KATMAN 10). Mevcut
+-- /telefonuyoket'e ise KATMAN 7 gereği yalnızca 15 saniyelik bir termit
+-- imha geri sayımı EKLENDİ (bkz. server/bureau.lua) -- kendi mantığı
+-- DEĞİŞTİRİLMEDİ.
+-- ---------------------------------------------------------------------
+Config.HardwareSabotage = {
+    ThermiteDestructionSeconds = 15,
+    ThermiteMoveTolerance       = 2.0,
+
+    -- Kovan/kasa asit banyosu — /malidefteriyak paravan şirket degausser'i
+    AcidBathCommand              = 'asitleyibitir',
+    AcidBottleItem                = 'chemical_acid_bottle',
+    AcidErosionPerApplication     = 0.20, -- Q_kovan bu kadar duser (tam donusum icin ~5 uygulama)
+    DegaussCommand                = 'malidefteriyak',
+
+    -- /namludegistir artık ANINDA değil — 60 saniyelik rijit tezgah kilidi.
+    BarrelSwapLockSeconds         = 60,
+    BarrelSwapEvidenceType        = 'dismantled_criminal_evidence'
+}
+
+Config.DeviceRecovery = {
+    Item                = 'partially_destroyed_device',
+    Command             = 'cihazcozumle',
+    DurationRealSeconds = 86400, -- 24 gercek saat
+    FragmentsTotal      = 24     -- saatte bir parca
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 5] door_lock_heavy — 120 SANİYELİK RİJİT FİZİKSEL KURULUM.
+-- ---------------------------------------------------------------------
+Config.DoorLockInstall = {
+    Item              = 'door_lock_heavy',
+    Command            = 'kapikiliditak',
+    InstallSeconds     = 120,
+    RadioStaticDuringInstall = 1.0 -- Matrix.Radio.ApplyStatic ile AYNI olcek [0,1]
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 8] KANIT SABOTAJI SUÇU + HÜCRE İZOLASYON İHLALİ (Context Drift)
+-- ---------------------------------------------------------------------
+Config.EvidenceTampering = {
+    ConvictionWeightMultiplier = 1.50 -- +%50
+}
+
+-- Her bot sınıfının (role) yalnızca kendi yetki alanındaki Matrix.* aile
+-- fonksiyonlarına dokunmasına izin verilir. Bu tablo, server/layer_
+-- directives.lua'nın Matrix.CellIsolation.Guard'ının okuduğu BEYAZ LİSTEDİR.
+Config.CellIsolation = {
+    Domains = {
+        chemist   = { 'kitchen', 'workbench_acid' },
+        runner    = { 'logistics', 'deaddrop' },
+        lookout   = { 'comint', 'bureau_watch' },
+        inspector = { 'inspector', 'forensics_review' }
+    }
+}
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 9] ÇİFT AJANLAR — mevcut matrix_vendor_pool.gang_loyalty
+-- ekseninde (DÜŞÜK deger = dusman finansmanli, bkz. server/underworld_
+-- network.lua dosya-basi yorumu) YENİ bir eksen İCAT EDİLMEZ: spec'in
+-- ">0.7 dusman-cete sadakati" esigi, bu tersine-cevrilmis olcekte
+-- gang_loyalty <= (1.0 - 0.7) = 0.30 olarak okunur.
+-- ---------------------------------------------------------------------
+Config.DoubleAgent = {
+    EnemyLoyaltyThreshold  = 0.30, -- gang_loyalty BU DEGERIN ALTINDAYSA cift-ajan
+    ScanIntervalSeconds     = 240,
+    JamAccumulatorSeed      = 0.85 -- spec: "~her 5 atista bir tutukluk"
 }
 
 return Config
