@@ -450,15 +450,33 @@ RegisterCommand(Config.SupplyChain.PurchaseCommand, function(src, args)
 end, false)
 
 
+-- ★ CRITICAL FIX: eski "fire-and-forget MySQL.prepare (await edilmeden) +
+-- sonuc dogrulanmadan basari loglama" deseni terk edildi (bkz.
+-- server/logistics.lua FlushDirtyFleet / server/market.lua
+-- FlushDirtyMarketZones ile AYNI desen). Simdi TUM satirlar TEK bir toplu
+-- MySQL.transaction.await icinde kilitlenir; basari SADECE transaction
+-- gercekten basariyla donduysa loglanir -- basarisiz olursa satirlar
+-- synced = 0 olarak KALIR ve bir sonraki flush turunda tekrar denenir
+-- (veri kaybi YOK, cift-loglama YOK).
 local function FlushSupplyChainBatch()
     local rows = MySQL.query.await('SELECT id, citizenid, item_ref, batch_id FROM matrix_batch_sync_queue WHERE synced = 0 LIMIT 500') or {}
     if #rows == 0 then return end
 
+    local queries = {}
     for _, row in ipairs(rows) do
-        MySQL.prepare('UPDATE matrix_batch_sync_queue SET synced = 1, synced_at = NOW() WHERE id = ?', { row.id })
+        queries[#queries + 1] = {
+            query = 'UPDATE matrix_batch_sync_queue SET synced = 1, synced_at = NOW() WHERE id = ? AND synced = 0',
+            values = { row.id }
+        }
     end
 
-    Matrix.Log('LAYERDIRECTIVES', '[TOPLU SENKRONIZASYON] %d bekleyen tedarik satisi Buro DB\'sine islendi.', #rows)
+    local ok, result = pcall(function() return MySQL.transaction.await(queries) end)
+    if ok and result ~= false then
+        Matrix.Log('LAYERDIRECTIVES', '[TOPLU SENKRONIZASYON] %d bekleyen tedarik satisi Buro DB\'sine islendi.', #rows)
+    else
+        Matrix.Log('LAYERDIRECTIVES', '[HATA][KRITIK] FlushSupplyChainBatch transaction basarisiz -- satirlar synced=0 olarak korundu, tekrar denenecek: %s',
+            tostring(result))
+    end
 end
 
 
@@ -609,6 +627,42 @@ function Matrix.LayerDirectives.IsDeviceRecovered(deviceId)
 end
 
 
+-- ★ CRITICAL FIX: /cihazcozumle (manuel kontrol) ve otonom
+-- ProcessDeviceRecoveryUnlocks (60s periyodik tarama) AYNI satiri
+-- ikisi de "SELECT sonra UPDATE" (check-then-act) ile isliyordu. Ikisi
+-- de MySQL.*.await ile "yield" ettigi icin (coroutine baglaminda diger
+-- komut/thread'ler araya girebilir), su senaryo mumkundu: oyuncu suresi
+-- dolar dolmaz /cihazcozumle calistirir -> unlocked=1 yapip doner ama
+-- matrix_forensic_evidence satiri EKLEMEZ; ardindan periyodik tarama
+-- "WHERE unlocked = 0" filtresine bu satiri artik yakalayamadigi icin
+-- kanit HICBIR ZAMAN adli olarak damgalanmaz (kalici veri kaybi).
+-- Cozum: unlock + adli damgalama TEK bir atomik fonksiyonda, affected-rows
+-- kontrolu ile birlestirildi -- "UPDATE ... WHERE unlocked = 0" SADECE
+-- BIR cagrinin 0->1 gecisini "kazanmasini" saglar (InnoDB row-lock ile
+-- atomik); kanit satiri SADECE o kazanan cagri tarafindan, SADECE BIR
+-- kez eklenir. Iki yol da (manuel komut ve periyodik tarama) artik bu
+-- TEK fonksiyonu cagiriyor.
+local function UnlockDeviceRecoveryAndStamp(deviceId, citizenid)
+    local affected = MySQL.update.await(
+        'UPDATE matrix_device_recovery SET unlocked = 1, fragments_decoded = ? WHERE device_id = ? AND unlocked = 0',
+        { Config.DeviceRecovery.FragmentsTotal or 24, deviceId })
+
+    if not (tonumber(affected) and tonumber(affected) > 0) then
+        return false -- zaten baska bir cagri tarafindan kazanildi/kilitlendi
+    end
+
+    MySQL.insert([[
+        INSERT INTO matrix_forensic_evidence
+            (ballistic_id, evidence_type, striation_quality, fingerprint_id, fingerprint_quality,
+             match_certainty, sealed_as_crime_weapon, recovery_target_epoch, created_at)
+        VALUES (?, 'cyber', 1.0, ?, 1.0, 1.0, 1, 0, NOW())
+    ]], { ('DEVICE-%s'):format(deviceId), ('DNA-PLR-%s'):format(citizenid or 'UNKNOWN') })
+
+    Matrix.Log('LAYERDIRECTIVES', '[CIHAZ COZULDU] %s adli olarak damgalandi (24s gercek-zaman doldu).', deviceId)
+    return true
+end
+
+
 RegisterCommand(Config.DeviceRecovery.Command, function(src, args)
     local slot = tonumber(args[1])
     if not slot then Reply(src, ('Kullanim: /%s [envanterSlotu]'):format(Config.DeviceRecovery.Command)); return end
@@ -647,8 +701,7 @@ RegisterCommand(Config.DeviceRecovery.Command, function(src, args)
         local hoursLeft = math.ceil(remaining / 3600)
         Reply(src, ('[ÇÖZÜLÜYOR] %s -- %d saat kaldı. Henüz mahkemede kanıt olarak kullanılamaz.'):format(deviceId, hoursLeft))
     else
-        MySQL.prepare('UPDATE matrix_device_recovery SET unlocked = 1, fragments_decoded = ? WHERE device_id = ?',
-            { Config.DeviceRecovery.FragmentsTotal or 24, deviceId })
+        UnlockDeviceRecoveryAndStamp(deviceId, citizenid)
         Reply(src, ('[ÇÖZÜLDÜ] %s -- 24 saatlik gerçek-zamanlı çözümleme tamamlandı, adli olarak damgalandı.'):format(deviceId))
     end
 end, false)
@@ -664,15 +717,7 @@ local function ProcessDeviceRecoveryUnlocks()
         { os_time() }) or {}
 
     for _, row in ipairs(rows) do
-        MySQL.prepare('UPDATE matrix_device_recovery SET unlocked = 1, fragments_decoded = ? WHERE id = ?',
-            { Config.DeviceRecovery.FragmentsTotal or 24, row.id })
-        MySQL.insert([[
-            INSERT INTO matrix_forensic_evidence
-                (ballistic_id, evidence_type, striation_quality, fingerprint_id, fingerprint_quality,
-                 match_certainty, sealed_as_crime_weapon, recovery_target_epoch, created_at)
-            VALUES (?, 'cyber', 1.0, ?, 1.0, 1.0, 1, 0, NOW())
-        ]], { ('DEVICE-%s'):format(row.device_id), ('DNA-PLR-%s'):format(row.citizenid or 'UNKNOWN') })
-        Matrix.Log('LAYERDIRECTIVES', '[CIHAZ COZULDU] %s otonom olarak adli damgalandi (24s gercek-zaman doldu).', row.device_id)
+        UnlockDeviceRecoveryAndStamp(row.device_id, row.citizenid)
     end
 end
 
@@ -914,7 +959,16 @@ function Matrix.CellIsolation.Guard(bot, domain)
 
     -- İhlal: kaydet, botu 'disbanded' moduna dondur (alt-hucrenin
     -- kaskadli sizmasini onlemek icin), false don.
-    MySQL.insert('INSERT INTO matrix_cell_isolation_violations (bot_id, role, attempted_domain, created_at) VALUES (?, ?, ?, NOW())',
+    -- ★ CRITICAL FIX: eski fire-and-forget MySQL.insert (await edilmeden)
+    -- burada YANLIS -- Guard() SENKRON false dondugu icin, cagiran taraf
+    -- (ornegin server/matrix_diagnostics.lua RunCellIsolationViolationCheck)
+    -- Guard()'dan hemen sonra ayni satiri DOGRULAMAK icin okuyabilir; insert
+    -- await edilmezse okuma, yazmadan ONCE yarisabilir (race) ve ihlal
+    -- satiri henuz DB'ye ulasmadan "yazilmadi" gibi gorunebilir. .await
+    -- eklenerek Guard() DONMEDEN once yazmanin gercekten TAMAMLANDIGI
+    -- garanti edilir (server/bureau.lua'daki diger denetim-kritik
+    -- yazilarla AYNI disiplin).
+    MySQL.insert.await('INSERT INTO matrix_cell_isolation_violations (bot_id, role, attempted_domain, created_at) VALUES (?, ?, ?, NOW())',
         { bot.id, bot.role, domain })
 
     bot.status = 'disbanded'

@@ -807,9 +807,18 @@ local function RunDeviceRecoveryEpochDriftCheck()
     local pastId   = ('DIAG-PAST-%d'):format(GetGameTimer())
     local futureId = ('DIAG-FUTURE-%d'):format(GetGameTimer())
 
-    MySQL.insert('INSERT INTO matrix_device_recovery (device_id, citizenid, recovery_target_epoch, unlocked, created_at) VALUES (?, ?, ?, 0, NOW())',
+    -- ★ CRITICAL FIX: fire-and-forget MySQL.insert (await edilmeden), hemen
+    -- ardindan gelen IsDeviceRecovered okumasiyla YARISIYORDU -- oxmysql'in
+    -- baglanti havuzunda bu INSERT'lerin, kendisinden SONRA gelen ama farkli
+    -- bir baglanti/kuyruk sirasinda islenebilen SELECT'ten daha GEC
+    -- tamamlanmasi mumkun; bu durumda satir henuz yokken okunur, IsDevice
+    -- Recovered nil satir icin false doner ve pastOk==true assert'i YANLIS
+    -- YERE basarisiz olur (KATMAN 10 kontrolunun asil basarisizlik nedeni).
+    -- .await ile INSERT'in fiilen TAMAMLANDIGI, sonraki okumadan ONCE
+    -- garanti edilir.
+    MySQL.insert.await('INSERT INTO matrix_device_recovery (device_id, citizenid, recovery_target_epoch, unlocked, created_at) VALUES (?, ?, ?, 0, NOW())',
         { pastId, 'DIAGNOSTIC', os.time() - 10 })
-    MySQL.insert('INSERT INTO matrix_device_recovery (device_id, citizenid, recovery_target_epoch, unlocked, created_at) VALUES (?, ?, ?, 0, NOW())',
+    MySQL.insert.await('INSERT INTO matrix_device_recovery (device_id, citizenid, recovery_target_epoch, unlocked, created_at) VALUES (?, ?, ?, 0, NOW())',
         { futureId, 'DIAGNOSTIC', os.time() + 3600 })
 
     local pastOk   = Matrix.LayerDirectives.IsDeviceRecovered(pastId)
