@@ -1317,3 +1317,168 @@ CREATE TABLE IF NOT EXISTS `matrix_diagnostics_stress_log` (
 --       'matrix_gang_hoods',
 --       'matrix_diagnostics_stress_log'
 --   );
+
+
+-- =======================================================================
+-- ★ KAYNAK: sql/layer_master_manifesto.sql (bu oturumda eklendi, KATMAN 1-10)
+-- Additive-only migration. Yukaridaki hicbir tablo/kolon DEGISTIRILMEDI/
+-- SILINMEDI -- yalnizca ADD COLUMN IF NOT EXISTS / CREATE TABLE IF NOT
+-- EXISTS kullanilir. server/layer_directives.lua'nin Config sozlesmesidir
+-- (bkz. shared/config.lua "MASTER MANIFESTO" blogu).
+-- =======================================================================
+
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 2] Gercek oyuncu karaborsa tezgahi lisansi/ihbarciligi.
+-- ---------------------------------------------------------------------
+ALTER TABLE `matrix_player_state`
+    ADD COLUMN IF NOT EXISTS `vendor_license` TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE `matrix_player_state`
+    ADD COLUMN IF NOT EXISTS `vendor_compromised` TINYINT(1) NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS `matrix_human_vendor_stands` (
+    `id`          INT          NOT NULL AUTO_INCREMENT,
+    `citizenid`   VARCHAR(50)  NOT NULL,
+    `coord_x`     FLOAT        NOT NULL,
+    `coord_y`     FLOAT        NOT NULL,
+    `coord_z`     FLOAT        NOT NULL,
+    `opened_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `closed_at`   DATETIME     NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_matrix_human_vendor_stands_citizenid` (`citizenid`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 3] Kontrollu Taktik Guc Uygulamasi -- matrix_player_state
+-- uzerinde matrix_bots ILE AYNI (wound_zone/leg_injury/arm_injury) sema +
+-- fear_index (Config.VendorPool.fear_index ILE AYNI [0,1] olcek, gercek
+-- oyuncular icin).
+-- ---------------------------------------------------------------------
+ALTER TABLE `matrix_player_state`
+    ADD COLUMN IF NOT EXISTS `wound_zone` VARCHAR(16) NULL;
+ALTER TABLE `matrix_player_state`
+    ADD COLUMN IF NOT EXISTS `leg_injury` FLOAT NOT NULL DEFAULT 0.0;
+ALTER TABLE `matrix_player_state`
+    ADD COLUMN IF NOT EXISTS `arm_injury` FLOAT NOT NULL DEFAULT 0.0;
+ALTER TABLE `matrix_player_state`
+    ADD COLUMN IF NOT EXISTS `fear_index` FLOAT NOT NULL DEFAULT 0.0;
+
+ALTER TABLE `matrix_forensic_evidence`
+    ADD COLUMN IF NOT EXISTS `inflicted_force_striation` FLOAT NULL;
+ALTER TABLE `matrix_forensic_evidence`
+    ADD COLUMN IF NOT EXISTS `metadata_note` VARCHAR(255) NULL;
+
+ALTER TABLE `matrix_trial_records`
+    ADD COLUMN IF NOT EXISTS `aggravated_charge` VARCHAR(150) NULL;
+ALTER TABLE `matrix_trial_records`
+    ADD COLUMN IF NOT EXISTS `evidence_tampering` TINYINT(1) NOT NULL DEFAULT 0;
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 4] Burokratik/Lojistik gecikme motoru -- toplu senkronizasyon
+-- kuyrugu + kontrabant/ALPR adli gunlugu (asla silinmez).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `matrix_batch_sync_queue` (
+    `id`          INT          NOT NULL AUTO_INCREMENT,
+    `citizenid`   VARCHAR(50)  NOT NULL,
+    `item_ref`    VARCHAR(100) NOT NULL,
+    `batch_id`    VARCHAR(64)  NOT NULL,
+    `synced`      TINYINT(1)   NOT NULL DEFAULT 0,
+    `created_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `synced_at`   DATETIME     NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_matrix_batch_sync_queue_synced` (`synced`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `matrix_illegal_supply_log` (
+    `id`                       INT          NOT NULL AUTO_INCREMENT,
+    `citizenid`                VARCHAR(50)  NULL,
+    `item_ref`                 VARCHAR(100) NOT NULL,
+    `plate`                    VARCHAR(32)  NULL,
+    `conviction_weight_applied`FLOAT        NOT NULL DEFAULT 0.0,
+    `created_at`               DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 5/10] Ele gecirilmis cihaz forensic recovery -- 24 gercek saat,
+-- server-restart-proof (recovery_target_epoch kalici DB kolonu -- RAM'de
+-- degil).
+-- ---------------------------------------------------------------------
+ALTER TABLE `matrix_forensic_evidence`
+    ADD COLUMN IF NOT EXISTS `recovery_target_epoch` BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE `matrix_trial_records`
+    ADD COLUMN IF NOT EXISTS `recovery_target_epoch` BIGINT NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS `matrix_device_recovery` (
+    `id`                       INT          NOT NULL AUTO_INCREMENT,
+    `device_id`                VARCHAR(64)  NOT NULL,
+    `citizenid`                VARCHAR(50)  NOT NULL,
+    `recovery_target_epoch`    BIGINT       NOT NULL DEFAULT 0,
+    `fragments_decoded`        INT          NOT NULL DEFAULT 0,
+    `unlocked`                 TINYINT(1)   NOT NULL DEFAULT 0,
+    `created_at`               DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uq_matrix_device_recovery_device_id` (`device_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 7] Namlu degisimi 60s kilit sirasinda tutuklanirsa el konulan
+-- parcalar + eski namlunun Q_kovan=1.0 capraz-eslestirmesi bu tabloya
+-- dismantled_criminal_evidence olarak islenir (matrix_forensic_evidence,
+-- asla silinmeyen kanit politikasiyla AYNI ruh).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `matrix_dismantled_evidence` (
+    `id`               INT          NOT NULL AUTO_INCREMENT,
+    `citizenid`        VARCHAR(50)  NULL,
+    `weapon_serial`    VARCHAR(64)  NOT NULL,
+    `striation_quality`FLOAT        NOT NULL DEFAULT 1.0,
+    `matched_case_id`  INT          NULL,
+    `created_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 8] Hucre Izolasyon Ihlali (Context Drift) -- bir botun kendi
+-- sinif yetki alani DISINDA bir Matrix.* aile fonksiyonuna erismeye
+-- calistigi her olay burada arsivlenir (asla silinmez, denetim izi).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `matrix_cell_isolation_violations` (
+    `id`             INT          NOT NULL AUTO_INCREMENT,
+    `bot_id`         INT          NOT NULL,
+    `role`           VARCHAR(32)  NOT NULL,
+    `attempted_domain` VARCHAR(50) NOT NULL,
+    `created_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- ---------------------------------------------------------------------
+-- [KATMAN 5] door_lock_heavy fiziksel 120s kurulum kilidi -- trap house
+-- basina son kurulum zaman damgasi (denetim/diagnostik amacli).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `matrix_door_lock_installs` (
+    `id`             INT          NOT NULL AUTO_INCREMENT,
+    `trap_house_id`  INT          NOT NULL,
+    `citizenid`      VARCHAR(50)  NULL,
+    `completed`      TINYINT(1)   NOT NULL DEFAULT 0,
+    `created_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+-- =====================================================================
+-- DOĞRULAMA SORGUSU (opsiyonel — bu dosya çalıştırıldıktan sonra 6 dönmeli)
+-- =====================================================================
+-- SELECT COUNT(*) AS layer_master_manifesto_table_count
+-- FROM information_schema.tables
+-- WHERE table_schema = DATABASE()
+--   AND table_name IN (
+--       'matrix_human_vendor_stands',
+--       'matrix_batch_sync_queue',
+--       'matrix_illegal_supply_log',
+--       'matrix_device_recovery',
+--       'matrix_dismantled_evidence',
+--       'matrix_cell_isolation_violations',
+--       'matrix_door_lock_installs'
+--   );

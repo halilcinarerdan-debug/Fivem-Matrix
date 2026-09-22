@@ -395,6 +395,42 @@ local DbChecks = {
     end },
     { 'matrix_diagnostics_stress_log tablosu mevcut (KATMAN 21)', function()
         return TableExists('matrix_diagnostics_stress_log'), 'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+
+    -- =================================================================
+    -- ★ MASTER MANIFESTO (KATMAN 1-10, server/layer_directives.lua)
+    -- =================================================================
+    { 'matrix_player_state.vendor_license kolonu mevcut (KATMAN 2)', function()
+        return ColumnExists('matrix_player_state', 'vendor_license'), 'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_player_state.wound_zone/fear_index kolonlari mevcut (KATMAN 3)', function()
+        return ColumnExists('matrix_player_state', 'wound_zone') and ColumnExists('matrix_player_state', 'fear_index'),
+            'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_trial_records.evidence_tampering kolonu mevcut (KATMAN 8)', function()
+        return ColumnExists('matrix_trial_records', 'evidence_tampering'), 'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_batch_sync_queue tablosu mevcut (KATMAN 4)', function()
+        return TableExists('matrix_batch_sync_queue'), 'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_illegal_supply_log tablosu mevcut (KATMAN 4)', function()
+        return TableExists('matrix_illegal_supply_log'), 'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_device_recovery tablosu + recovery_target_epoch kolonu mevcut (KATMAN 5/10)', function()
+        return TableExists('matrix_device_recovery') and ColumnExists('matrix_forensic_evidence', 'recovery_target_epoch'),
+            'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_dismantled_evidence tablosu mevcut (KATMAN 7)', function()
+        return TableExists('matrix_dismantled_evidence'), 'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_cell_isolation_violations tablosu mevcut (KATMAN 8)', function()
+        return TableExists('matrix_cell_isolation_violations'), 'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_door_lock_installs tablosu mevcut (KATMAN 5)', function()
+        return TableExists('matrix_door_lock_installs'), 'sql/matrix_financial_core.sql calistirildi mi?'
+    end },
+    { 'matrix_human_vendor_stands tablosu mevcut (KATMAN 2)', function()
+        return TableExists('matrix_human_vendor_stands'), 'sql/matrix_financial_core.sql calistirildi mi?'
     end }
 }
 
@@ -736,12 +772,66 @@ local function RunMedicalBureauLeakSimCheck()
 end
 
 
+-- ★ MASTER MANIFESTO KATMAN 8: Hücre İzolasyon İhlali (Context Drift)
+-- gerçek bir kullan-at test botuyla uçtan uca kanıtlanır -- botun 'chemist'
+-- rolüyle yetki-dışı ('logistics') bir alana erişmeye çalıştığında
+-- Matrix.CellIsolation.Guard'ın status='disbanded' KİLİTLEDİĞİNİ VE
+-- matrix_cell_isolation_violations'a bir satır YAZDIĞINI doğrular.
+local function RunCellIsolationViolationCheck()
+    assert(type(Matrix.CellIsolation) == 'table' and type(Matrix.CellIsolation.Guard) == 'function',
+        'Matrix.CellIsolation.Guard tanimli degil')
+
+    local testBot = Matrix.CreateBotRecord({ name = 'DIAGNOSTIC-ISOLATION-BOT', role = 'chemist' })
+    assert(testBot and testBot.id, 'test botu olusturulamadi')
+
+    local before = MySQL.scalar.await('SELECT COUNT(*) FROM matrix_cell_isolation_violations WHERE bot_id = ?', { testBot.id }) or 0
+    local allowed = Matrix.CellIsolation.Guard(testBot, 'logistics') -- chemist'in yetki alaninda DEGIL
+    local after = MySQL.scalar.await('SELECT COUNT(*) FROM matrix_cell_isolation_violations WHERE bot_id = ?', { testBot.id }) or 0
+
+    Matrix.RemoveBot(testBot.id, 'retired')
+
+    assert(allowed == false, 'Guard yetki-disi alana erisime izin verdi (beklenen: false)')
+    assert(tonumber(after) > tonumber(before), 'ihlal matrix_cell_isolation_violations tablosuna YAZILMADI')
+
+    return true, ('Bot #%d chemist->logistics ihlali dogru yakalandi, %d->%d ihlal satiri.'):format(testBot.id, before, after)
+end
+
+-- ★ MASTER MANIFESTO KATMAN 10: recovery_target_epoch server-restart-proof
+-- olduğunu (RAM'de değil, matrix_device_recovery'de kalıcı bir kolon)
+-- ve Matrix.LayerDirectives.IsDeviceRecovered'ın geçmiş/gelecek epoch'ları
+-- doğru ayırt ettiğini kanıtlar. Test satırları HER KOŞULDA silinir.
+local function RunDeviceRecoveryEpochDriftCheck()
+    assert(type(Matrix.LayerDirectives) == 'table' and type(Matrix.LayerDirectives.IsDeviceRecovered) == 'function',
+        'Matrix.LayerDirectives.IsDeviceRecovered tanimli degil')
+
+    local pastId   = ('DIAG-PAST-%d'):format(GetGameTimer())
+    local futureId = ('DIAG-FUTURE-%d'):format(GetGameTimer())
+
+    MySQL.insert('INSERT INTO matrix_device_recovery (device_id, citizenid, recovery_target_epoch, unlocked, created_at) VALUES (?, ?, ?, 0, NOW())',
+        { pastId, 'DIAGNOSTIC', os.time() - 10 })
+    MySQL.insert('INSERT INTO matrix_device_recovery (device_id, citizenid, recovery_target_epoch, unlocked, created_at) VALUES (?, ?, ?, 0, NOW())',
+        { futureId, 'DIAGNOSTIC', os.time() + 3600 })
+
+    local pastOk   = Matrix.LayerDirectives.IsDeviceRecovered(pastId)
+    local futureOk = Matrix.LayerDirectives.IsDeviceRecovered(futureId)
+
+    MySQL.query.await('DELETE FROM matrix_device_recovery WHERE device_id IN (?, ?)', { pastId, futureId })
+
+    assert(pastOk == true, 'gecmis (dolmus) epoch YANLISLIKLA hala kilitli rapor edildi')
+    assert(futureOk == false, 'gelecek epoch YANLISLIKLA erken kilidi acik rapor edildi')
+
+    return true, 'gecmis-epoch=kilit-acik, gelecek-epoch=kilitli -- restart-proof kolon dogrulandi.'
+end
+
+
 local SimulationChecks = {
     { 'DERIN-SIM: 100 eszamanli async satis stres testi (KATMAN 21.1)',            RunConcurrencyStressCheck },
     { 'DERIN-SIM: Bot yara ceza carpani 4-hane hassasiyeti (KATMAN 21.2)',          RunWoundPrecisionSimCheck },
     { 'DERIN-SIM: Hayalet Doktor 10k-epoch palindrom determinizmi (KATMAN 21.3)',   RunPhantomDoctorPalindromeSimCheck },
     { 'DERIN-SIM: Hit-and-Run drive-by tazelenmesi (KATMAN 22.1)',                  RunHitAndRunDrivebySimCheck },
-    { 'DERIN-SIM: Medikal/Buro sizinti 2x katlanma formulu (KATMAN 22.2)',          RunMedicalBureauLeakSimCheck }
+    { 'DERIN-SIM: Medikal/Buro sizinti 2x katlanma formulu (KATMAN 22.2)',          RunMedicalBureauLeakSimCheck },
+    { 'DERIN-SIM: Hucre Izolasyon Ihlali / Context Drift (MASTER KATMAN 8)',        RunCellIsolationViolationCheck },
+    { 'DERIN-SIM: Cihaz Recovery epoch-drift restart-proof dogrulamasi (MASTER KATMAN 10)', RunDeviceRecoveryEpochDriftCheck }
 }
 
 

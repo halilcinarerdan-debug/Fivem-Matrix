@@ -2495,7 +2495,33 @@ function Matrix.Bureau.SabotagePhoneLine(src, dnaId)
 end
 
 
+-- ★ [MASTER MANIFESTO KATMAN 7] Bu komut artık ANINDA çalışmaz: bir hattı
+-- fiziksel olarak yok etmek (termit imha) Config.HardwareSabotage.
+-- ThermiteDestructionSeconds (15sn) sürecek bir geri sayım gerektirir.
+-- Matrix.Bureau.SabotagePhoneLine'ın KENDİSİ (yukarısı) HİÇ DEĞİŞMEDİ --
+-- yalnızca bu komut katmanına bir "yerinde kal" kilidi eklendi. Oyuncu
+-- 15sn içinde başlangıç konumundan (mikrodalga/router koordinatı)
+-- ThermiteMoveTolerance metreden fazla uzaklaşırsa imha İPTAL edilir.
 RegisterCommand('telefonuyoket', function(src, args)
+    local ped = GetPlayerPed(src)
+    local startCoords = ped and ped ~= 0 and GetEntityCoords(ped) or nil
+
+    local seconds = (Config.HardwareSabotage and Config.HardwareSabotage.ThermiteDestructionSeconds) or 15
+    Reply(src, ('[TERMİT İMHA BAŞLADI] %d saniye boyunca yerinizde kalin -- hareket ederseniz islem iptal olur.'):format(seconds))
+
+    -- RegisterCommand callback'i kendi coroutine'inde çalışır -- Wait()
+    -- yalnızca BU çağrıyı bloklar, master ticker'ı ETKİLEMEZ.
+    local ticks = math.max(1, math.floor(seconds))
+    for _ = 1, ticks do
+        Wait(1000)
+        local livePed = GetPlayerPed(src)
+        local liveCoords = livePed and livePed ~= 0 and GetEntityCoords(livePed) or nil
+        if not liveCoords or not startCoords or #(liveCoords - startCoords) > ((Config.HardwareSabotage and Config.HardwareSabotage.ThermiteMoveTolerance) or 2.0) then
+            Reply(src, '[İMHA İPTAL] Konumdan ayrildiniz -- termit imha durduruldu.')
+            return
+        end
+    end
+
     local ok, resultOrReason = Matrix.Bureau.SabotagePhoneLine(src, args[1])
     if ok then
         Reply(src, ('[HAT SABOTAJI] %s hattina ait kriptolu mesajlar ve kesinlesmemis siber deliller kalici olarak kazindi.'):format(resultOrReason.dna_id))

@@ -18,7 +18,11 @@ client_scripts {
     -- Bach ses katmanı (bkz. shared/config.lua Config.ComposerSignature).
     'client/composer_intro.lua',
     -- ★ Yeralti Genisletmesi KATMAN 1: fiziksel muhafiz/kurye takipci botlari.
-    'client/mercenary_followers.lua'
+    'client/mercenary_followers.lua',
+    -- ★ MASTER MANIFESTO (KATMAN 1-10): server/layer_directives.lua'nın
+    -- 120s kapı sürgü kurulumu / 60s namlu değişimi sırasında oyuncuyu
+    -- geçici olarak silahsız+savunmasız bırakan minimal istemci kancası.
+    'client/layer_directives_client.lua'
 }
 
 server_scripts {
@@ -51,6 +55,11 @@ server_scripts {
     -- onların ARKASINDA yüklenir (gang_hoods.lua'nın Config.GangHoods'u
     -- doldurmasından SONRA).
     'server/hitsquad.lua',
+    -- ★ MASTER MANIFESTO (KATMAN 1-10): Matrix.Bureau/Matrix.Forensics/
+    -- Matrix.BlackMarket/Matrix.FragmentedIntel/Matrix.VendorPool/
+    -- Matrix.GangHoods'un ZATEN YÜKLENMİŞ olması gerektiği için listede
+    -- ONLARDAN SONRA, matrix_diagnostics.lua'dan ÖNCE yer alır.
+    'server/layer_directives.lua',
     -- ★ Otomasyonlu Regresyon Çekirdeği: diğer TÜM server dosyalarının
     -- Matrix.* kancalarını okuduğu için listenin EN SONUNDA (yalnızca
     -- okunabilirlik için -- kontroller run-time'da çalıştığından, o ana
